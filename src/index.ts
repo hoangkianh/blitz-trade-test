@@ -17,33 +17,46 @@ const provider = new ethers.WebSocketProvider(WS_RPC);
 const { tokens, wallets } = data;
 
 const getBalances = async (): Promise<any[]> => {
-  const balances: any[] = [];
+  const balances = await Promise.all(
+    wallets.map(async (address: string) => {
+      const walletBalancePromise = provider.getBalance(address);
+      const tokenBalances = await Promise.all(
+        tokens.map(async (tokenAddress: string) => {
+          const tokenContract = new ethers.Contract(
+            tokenAddress,
+            ERC20_ABI,
+            provider
+          );
+          const balancePromise = tokenContract.balanceOf(address);
+          const decimalsPromise = tokenContract.decimals();
+          const symbolPromise = tokenContract.symbol();
 
-  for (const address of wallets) {
-    console.log(`Address: ${address}`);
-    const walletBalance = await provider.getBalance(address);
-    const walletBalanceEth = ethers.formatEther(walletBalance);
-    const tokenBalances: { [symbol: string]: string } = {};
-    for (const tokenAddress of tokens) {
-      const tokenContract: Contract = new ethers.Contract(
-        tokenAddress,
-        ERC20_ABI,
-        provider
+          const [balance, decimals, symbol] = await Promise.all([
+            balancePromise,
+            decimalsPromise,
+            symbolPromise,
+          ]);
+
+          const formattedBalance = ethers.formatUnits(balance, decimals);
+          return { symbol, balance: formattedBalance };
+        })
       );
-      const balance = await tokenContract.balanceOf(address);
-      const decimals = await tokenContract.decimals();
-      const symbol = await tokenContract.symbol();
 
-      const formattedBalance = ethers.formatUnits(balance, decimals);
-      tokenBalances[symbol] = formattedBalance;
-    }
+      const [walletBalance, tokenBalancesResult] = await Promise.all([
+        walletBalancePromise,
+        Promise.all(tokenBalances),
+      ]);
 
-    balances.push({
-      address: address,
-      ethBalance: walletBalanceEth,
-      tokenBalances,
-    });
-  }
+      return {
+        address,
+        ethBalance: ethers.formatEther(walletBalance),
+        tokenBalances: tokenBalancesResult.reduce((acc: any, token: any) => {
+          acc[token.symbol] = token.balance;
+          return acc;
+        }, {}),
+      };
+    })
+  );
   console.log("getBalances done");
 
   return balances;
