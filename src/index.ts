@@ -10,7 +10,7 @@ dotenv.config();
 const RPC_URL = process.env.RPC_URL ?? "https://eth.llamarpc.com";
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const { tokens, wallets } = data;
+const { tokens, wallets }: { tokens: string[]; wallets: string[] } = data;
 
 const getBalance = async (
   address: string,
@@ -66,19 +66,16 @@ const saveToCSV = async (
 ): Promise<void> => {
   let csv = "Address,ETH Balance";
 
-  // Add token symbol columns to the CSV header
   for (const tokenAddress of tokens) {
-    const symbol = symbolMap.get(tokenAddress) || "";
+    const symbol = symbolMap.get(tokenAddress)?.toUpperCase() || "";
     csv += `, ${symbol}`;
   }
 
-  // Add data rows to the CSV
   for (const wallet of data) {
     csv += `\n ${wallet.address}, ${wallet.ethBalance} ETH`;
-
     for (const tokenAddress of tokens) {
-      const balance = wallet.tokenBalances[tokenAddress] || "0";
-      const symbol = symbolMap.get(tokenAddress) || "";
+      const symbol = symbolMap.get(tokenAddress)?.toUpperCase() || "";
+      const balance = wallet.tokenBalances[symbol] || "0";
       csv += `, ${balance} ${symbol}`;
     }
   }
