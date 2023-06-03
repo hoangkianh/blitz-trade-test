@@ -1,25 +1,21 @@
-import { ethers, Contract } from "ethers";
+import { ethers } from "ethers";
 import fs from "fs";
 import * as dotenv from "dotenv";
 import ERC20_ABI from "../abi/erc20.json" assert { type: "json" };
 import data from "../data/input.json" assert { type: "json" };
+import axios from "axios";
 
 dotenv.config();
 
-const WS_RPC = process.env.WS_RPC;
+const RPC_URL = process.env.RPC_URL ?? "https://eth.llamarpc.com";
 
-if (!WS_RPC) {
-  console.log("WS_RPC is not defined");
-  process.exit(1);
-}
-
-const provider = new ethers.WebSocketProvider(WS_RPC);
+const provider = new ethers.JsonRpcProvider(RPC_URL);
 const { tokens, wallets } = data;
 
 const getBalance = async (
   address: string,
   tokenAddress: string
-): Promise<any> => {
+): Promise<{ balance: string; symbol: string }> => {
   const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
   const [balance, decimals, symbol] = await Promise.all([
     tokenContract.balanceOf(address),
@@ -32,13 +28,15 @@ const getBalance = async (
   };
 };
 
-const getBalances = async (): Promise<any[]> => {
+const getBalances = async (): Promise<
+  { address: string; ethBalance: string; tokenBalances: Map<string, string> }[]
+> => {
   const balancePromises = wallets.map(async (wallet: string) => {
     const balancePromise = provider.getBalance(wallet);
-
     const tokenBalancePromises = tokens.map((tokenAddress: string) =>
       getBalance(wallet, tokenAddress)
     );
+
     const [ethBalance, tokenBalances] = await Promise.all([
       balancePromise,
       Promise.all(tokenBalancePromises),
@@ -89,22 +87,27 @@ const saveToCSV = async (
   console.log("Data saved to balances.csv");
 };
 
-const getSymbolMap = async (): Promise<Map<string, string>> => {
-  const provider = ethers.getDefaultProvider("mainnet");
-  const symbolPromises = tokens.map((tokenAddress: string) => {
-    const tokenContract = new ethers.Contract(
-      tokenAddress,
-      ERC20_ABI,
-      provider
-    );
-    return tokenContract.symbol();
-  });
-  const symbols = await Promise.all(symbolPromises);
-  const symbolMap = new Map<string, string>();
-  for (let i = 0; i < tokens.length; i++) {
-    symbolMap.set(tokens[i], symbols[i]);
-  }
-  return symbolMap;
+const getTokenSymbols = async (): Promise<Map<string, string>> => {
+  const symbolsMap = new Map<string, string>();
+
+  await Promise.all(
+    tokens.map(async (tokenAddress: string) => {
+      try {
+        const response = await axios.get(
+          `https://api.coingecko.com/api/v3/coins/ethereum/contract/${tokenAddress}`
+        );
+        const symbol = response.data.symbol;
+        symbolsMap.set(tokenAddress, symbol);
+      } catch (error) {
+        console.error(
+          `Failed to fetch symbol for token ${tokenAddress}:`,
+          error
+        );
+      }
+    })
+  );
+
+  return symbolsMap;
 };
 
 const main = async () => {
@@ -112,7 +115,7 @@ const main = async () => {
     const startTime = Date.now();
     const [balances, symbolMap] = await Promise.all([
       getBalances(),
-      getSymbolMap(),
+      getTokenSymbols(),
     ]);
     await saveToCSV(balances, symbolMap);
     const endTime = Date.now();
