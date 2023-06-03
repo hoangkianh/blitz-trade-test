@@ -16,60 +16,61 @@ if (!WS_RPC) {
 const provider = new ethers.WebSocketProvider(WS_RPC);
 const { tokens, wallets } = data;
 
-const getBalances = async (): Promise<any[]> => {
-  const balances = await Promise.all(
-    wallets.map(async (address: string) => {
-      const walletBalancePromise = provider.getBalance(address);
-      const tokenBalances = await Promise.all(
-        tokens.map(async (tokenAddress: string) => {
-          const tokenContract = new ethers.Contract(
-            tokenAddress,
-            ERC20_ABI,
-            provider
-          );
-          const balancePromise = tokenContract.balanceOf(address);
-          const decimalsPromise = tokenContract.decimals();
-          const symbolPromise = tokenContract.symbol();
-
-          const [balance, decimals, symbol] = await Promise.all([
-            balancePromise,
-            decimalsPromise,
-            symbolPromise,
-          ]);
-
-          const formattedBalance = ethers.formatUnits(balance, decimals);
-          return { symbol, balance: formattedBalance };
-        })
-      );
-
-      const [walletBalance, tokenBalancesResult] = await Promise.all([
-        walletBalancePromise,
-        Promise.all(tokenBalances),
-      ]);
-
-      return {
-        address,
-        ethBalance: ethers.formatEther(walletBalance),
-        tokenBalances: tokenBalancesResult.reduce((acc: any, token: any) => {
-          acc[token.symbol] = token.balance;
-          return acc;
-        }, {}),
-      };
-    })
-  );
-  console.log("getBalances done");
-
-  return balances;
+const getBalance = async (
+  address: string,
+  tokenAddress: string
+): Promise<any> => {
+  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const [balance, decimals, symbol] = await Promise.all([
+    tokenContract.balanceOf(address),
+    tokenContract.decimals(),
+    tokenContract.symbol(),
+  ]);
+  return {
+    balance: ethers.formatUnits(balance, decimals),
+    symbol,
+  };
 };
 
-const saveToCSV = async (data: any[]): Promise<void> => {
+const getBalances = async (): Promise<any[]> => {
+  const balancePromises = wallets.map(async (wallet: string) => {
+    const balancePromise = provider.getBalance(wallet);
+
+    const tokenBalancePromises = tokens.map((tokenAddress: string) =>
+      getBalance(wallet, tokenAddress)
+    );
+    const [ethBalance, tokenBalances] = await Promise.all([
+      balancePromise,
+      Promise.all(tokenBalancePromises),
+    ]);
+
+    const tokenBalancesMap = tokenBalances.reduce(
+      (acc: any, { symbol, balance }: any) => {
+        acc[symbol] = balance;
+        return acc;
+      },
+      {}
+    );
+
+    return {
+      address: wallet,
+      ethBalance: ethers.formatEther(ethBalance),
+      tokenBalances: tokenBalancesMap,
+    };
+  });
+
+  return Promise.all(balancePromises);
+};
+
+const saveToCSV = async (
+  data: any[],
+  symbolMap: Map<string, string>
+): Promise<void> => {
   let csv = "Address,ETH Balance";
 
-  // Extract unique token symbols
-  const symbols = Array.from(new Set(tokens.map((token: any) => token.symbol)));
-
-  // Add token balance columns to the CSV header
-  for (const symbol of symbols) {
+  // Add token symbol columns to the CSV header
+  for (const tokenAddress of tokens) {
+    const symbol = symbolMap.get(tokenAddress) || "";
     csv += `, ${symbol}`;
   }
 
@@ -77,9 +78,10 @@ const saveToCSV = async (data: any[]): Promise<void> => {
   for (const wallet of data) {
     csv += `\n ${wallet.address}, ${wallet.ethBalance} ETH`;
 
-    for (const symbol of symbols) {
-      const balance = wallet.tokenBalances[symbol] || "0";
-      csv += `, ${balance}`;
+    for (const tokenAddress of tokens) {
+      const balance = wallet.tokenBalances[tokenAddress] || "0";
+      const symbol = symbolMap.get(tokenAddress) || "";
+      csv += `, ${balance} ${symbol}`;
     }
   }
 
@@ -87,11 +89,32 @@ const saveToCSV = async (data: any[]): Promise<void> => {
   console.log("Data saved to balances.csv");
 };
 
+const getSymbolMap = async (): Promise<Map<string, string>> => {
+  const provider = ethers.getDefaultProvider("mainnet");
+  const symbolPromises = tokens.map((tokenAddress: string) => {
+    const tokenContract = new ethers.Contract(
+      tokenAddress,
+      ERC20_ABI,
+      provider
+    );
+    return tokenContract.symbol();
+  });
+  const symbols = await Promise.all(symbolPromises);
+  const symbolMap = new Map<string, string>();
+  for (let i = 0; i < tokens.length; i++) {
+    symbolMap.set(tokens[i], symbols[i]);
+  }
+  return symbolMap;
+};
+
 const main = async () => {
   try {
     const startTime = Date.now();
-    const balances = await getBalances();
-    await saveToCSV(balances);
+    const [balances, symbolMap] = await Promise.all([
+      getBalances(),
+      getSymbolMap(),
+    ]);
+    await saveToCSV(balances, symbolMap);
     const endTime = Date.now();
     const executionTime = endTime - startTime;
     console.log(`Execution time: ${executionTime}ms`);
